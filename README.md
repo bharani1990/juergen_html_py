@@ -19,7 +19,7 @@ uv --version
 ## 2. Go to the project folder
 
 ```powershell
-cd E:\Work\8_Juergen_help
+cd ...
 ```
 
 ## 3. Install the project dependencies
