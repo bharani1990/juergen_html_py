@@ -1,0 +1,337 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Offline HTML-Viewer</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: Arial, sans-serif;
+            background-color: #98FB98;
+            color: #000;
+            display: flex;
+            flex-direction: column;
+            height: 100vh;
+        }
+        
+        #toolbar {
+            background-color: #f0f0f0;
+            padding: 10px;
+            border-bottom: 1px solid #ccc;
+            display: flex;
+            gap: 10px;
+            flex-wrap: wrap;
+            align-items: center;
+        }
+        
+        button {
+            padding: 8px 15px;
+            background-color: #e0e0e0;
+            border: 1px solid #999;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 14px;
+        }
+        
+        button:hover {
+            background-color: #d0d0d0;
+        }
+        
+        input[type="file"] {
+            padding: 5px;
+        }
+        
+        #zoomLevel {
+            font-weight: bold;
+            min-width: 50px;
+        }
+        
+        #fileList {
+            background-color: #f9f9f9;
+            border-right: 1px solid #ccc;
+            width: 200px;
+            overflow-y: auto;
+            padding: 10px;
+        }
+        
+        #fileList.hidden {
+            display: none;
+        }
+        
+        .file-item {
+            padding: 8px;
+            margin: 5px 0;
+            background-color: #e8f5e9;
+            border: 1px solid #4CAF50;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 13px;
+        }
+        
+        .file-item:hover {
+            background-color: #c8e6c9;
+        }
+        
+        .file-item.active {
+            background-color: #4CAF50;
+            color: white;
+        }
+        
+        #contentWrapper {
+            display: flex;
+            flex: 1;
+            overflow: hidden;
+        }
+        
+        #content {
+            flex: 1;
+            overflow-y: auto;
+            padding: 20px;
+            background-color: #90EE90;
+            font-size: 16px;
+            line-height: 1.6;
+        }
+        
+        #content img {
+            max-width: 100%;
+            height: auto;
+            margin: 10px 0;
+        }
+        
+        #status {
+            background-color: #f0f0f0;
+            padding: 8px;
+            border-top: 1px solid #ccc;
+            font-size: 12px;
+            color: #666;
+        }
+        
+        .error {
+            color: #d32f2f;
+        }
+    </style>
+</head>
+<body>
+    <div id="toolbar">
+        <input type="file" id="fileInput" multiple accept=".htm,.html,.mhtml" title="Wählen Sie HTML-Dateien">
+        <button id="pageUpBtn" title="Seite nach oben">⬆ Seite hoch</button>
+        <button id="pageDownBtn" title="Seite nach unten">⬇ Seite runter</button>
+        <button id="zoomInBtn" title="Vergrößern">🔍+ Zoom +</button>
+        <button id="zoomOutBtn" title="Verkleinern">🔍- Zoom -</button>
+        <div id="zoomLevel">100%</div>
+        <button id="toggleListBtn" title="Dateiliste anzeigen/verbergen">📋 Liste</button>
+    </div>
+    
+    <div id="contentWrapper">
+        <div id="fileList" class="hidden"></div>
+        <div id="content"></div>
+    </div>
+    
+    <div id="status"></div>
+
+    <script>
+        let files = [];
+        let currentFileIndex = 0;
+        let zoomLevel = 100;
+        const contentDiv = document.getElementById('content');
+        const fileListDiv = document.getElementById('fileList');
+        const fileInput = document.getElementById('fileInput');
+        const statusDiv = document.getElementById('status');
+        const zoomLevelDisplay = document.getElementById('zoomLevel');
+
+        // Event Listener für Dateiauswahl
+        fileInput.addEventListener('change', (e) => {
+            files = Array.from(e.target.files);
+            currentFileIndex = 0;
+            fileListDiv.innerHTML = '';
+            
+            if (files.length === 0) {
+                updateStatus('Keine Dateien ausgewählt');
+                return;
+            }
+            
+            files.forEach((file, index) => {
+                const item = document.createElement('div');
+                item.className = 'file-item' + (index === 0 ? ' active' : '');
+                item.textContent = file.name;
+                item.addEventListener('click', () => {
+                    currentFileIndex = index;
+                    loadFile(index);
+                    updateFileList();
+                });
+                fileListDiv.appendChild(item);
+            });
+            
+            loadFile(0);
+            updateStatus(`${files.length} Datei(en) geladen`);
+        });
+
+        function loadFile(index) {
+            if (index < 0 || index >= files.length) {
+                updateStatus('Keine weitere Datei vorhanden');
+                return;
+            }
+            
+            currentFileIndex = index;
+            const file = files[index];
+            const reader = new FileReader();
+            
+            reader.onload = (e) => {
+                try {
+                    if (file.name.endsWith('.mhtml')) {
+                        loadMHTML(e.target.result, file.name);
+                    } else {
+                        contentDiv.innerHTML = e.target.result;
+                        processImages();
+                        contentDiv.scrollTop = 0;
+                        updateStatus(`Datei geladen: ${file.name}`);
+                    }
+                } catch (error) {
+                    updateStatus(`Fehler beim Laden: ${error.message}`, true);
+                }
+            };
+            
+            reader.onerror = () => {
+                updateStatus('Fehler beim Lesen der Datei', true);
+            };
+            
+            reader.readAsText(file);
+        }
+
+        function loadMHTML(content, filename) {
+            const boundary = content.split('\r\n')[1];
+            const parts = content.split(boundary);
+            let htmlContent = '';
+            const images = {};
+            
+            for (let part of parts) {
+                if (part.includes('text/html')) {
+                    const bodyStart = part.indexOf('\r\n\r\n');
+                    if (bodyStart !== -1) {
+                        htmlContent = part.substring(bodyStart + 4).trim();
+                    }
+                } else if (part.includes('image/')) {
+                    const headerEnd = part.indexOf('\r\n\r\n');
+                    if (headerEnd !== -1) {
+                        const header = part.substring(0, headerEnd);
+                        const contentIdMatch = header.match(/Content-ID:\s*<(.+?)>/i);
+                        if (contentIdMatch) {
+                            const contentId = contentIdMatch[1];
+                            const imageData = part.substring(headerEnd + 4).trim();
+                            images[contentId] = imageData;
+                        }
+                    }
+                }
+            }
+            
+            htmlContent = htmlContent.replace(/cid:([^\s"']+)/g, (match, cid) => {
+                return images[cid] ? `data:image/png;base64,${images[cid]}` : match;
+            });
+            
+            contentDiv.innerHTML = htmlContent;
+            processImages();
+            contentDiv.scrollTop = 0;
+            updateStatus(`MHTML-Datei geladen: ${filename}`);
+        }
+
+        function processImages() {
+            // Bilder in der Datei bleiben erhalten
+            const images = contentDiv.querySelectorAll('img');
+            images.forEach(img => {
+                if (img.src) {
+                    // Relative Pfade werden akzeptiert, wenn die Bilder in der Datei vorhanden sind
+                }
+            });
+        }
+
+        function updateFileList() {
+            const items = fileListDiv.querySelectorAll('.file-item');
+            items.forEach((item, index) => {
+                item.classList.toggle('active', index === currentFileIndex);
+            });
+        }
+
+        // Steuerungstasten
+        document.getElementById('pageUpBtn').addEventListener('click', pageUp);
+        document.getElementById('pageDownBtn').addEventListener('click', pageDown);
+        document.getElementById('zoomInBtn').addEventListener('click', zoomIn);
+        document.getElementById('zoomOutBtn').addEventListener('click', zoomOut);
+        document.getElementById('toggleListBtn').addEventListener('click', toggleFileList);
+
+        function pageUp() {
+            contentDiv.scrollTop -= contentDiv.clientHeight;
+        }
+
+        function pageDown() {
+            contentDiv.scrollTop += contentDiv.clientHeight;
+        }
+
+        function zoomIn() {
+            zoomLevel = Math.min(zoomLevel + 10, 200);
+            applyZoom();
+        }
+
+        function zoomOut() {
+            zoomLevel = Math.max(zoomLevel - 10, 50);
+            applyZoom();
+        }
+
+        function applyZoom() {
+            contentDiv.style.fontSize = (16 * zoomLevel / 100) + 'px';
+            zoomLevelDisplay.textContent = zoomLevel + '%';
+        }
+
+        function toggleFileList() {
+            fileListDiv.classList.toggle('hidden');
+        }
+
+        function updateStatus(message, isError = false) {
+            statusDiv.textContent = message;
+            statusDiv.className = isError ? 'error' : '';
+        }
+
+        // Tastatur-Shortcuts
+        document.addEventListener('keydown', (e) => {
+            switch(e.key) {
+                case 'PageUp':
+                    e.preventDefault();
+                    pageUp();
+                    break;
+                case 'PageDown':
+                    e.preventDefault();
+                    pageDown();
+                    break;
+                case ' ':
+                    e.preventDefault();
+                    if (contentDiv.scrollTop + contentDiv.clientHeight >= contentDiv.scrollHeight) {
+                        // Am Ende der Seite - nächste Datei laden
+                        if (currentFileIndex < files.length - 1) {
+                            loadFile(currentFileIndex + 1);
+                            updateFileList();
+                        }
+                    } else {
+                        pageDown();
+                    }
+                    break;
+                case '+':
+                case '=':
+                    e.preventDefault();
+                    zoomIn();
+                    break;
+                case '-':
+                    e.preventDefault();
+                    zoomOut();
+                    break;
+            }
+        });
+
+        updateStatus('Datei(en) auswählen zum Starten');
+    </script>
+</body>
+</html>
